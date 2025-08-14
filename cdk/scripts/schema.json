@@ -1,0 +1,27 @@
+{
+  "billing": {
+    "balance": {},
+    "high_bill": {},
+    "charges": {},
+    "due_date": {}
+  },
+  "payment": {
+    "make_payment": {},
+    "arrangement": {},
+    "late_payment": {},
+    "waive_late_fee": {}
+  },
+  "technical": {
+    "internet": {},
+    "wifi": {},
+    "calls": {},
+    "signal": {}
+  },
+  "service": {
+    "order_new": {},
+    "add_line": {},
+    "cancel": {},
+    "moving": {},
+    "upgrade": {}
+  }
+}

@@ -247,7 +247,7 @@ export const handler: APIGatewayProxyHandler = async (event) => {
   }
 
   try {
-    const isTranscriptsPath = event.path === '/transcripts' || event.pathParameters?.proxy === 'transcripts';
+    const isTranscriptsPath = event.path === '/results' || event.pathParameters?.proxy === 'results';
     
     if (event.httpMethod === 'GET' && isTranscriptsPath) {
       const results = await dbClient.send(new ScanCommand({ TableName: RESULT_TABLE_NAME }));
@@ -271,9 +271,23 @@ export const handler: APIGatewayProxyHandler = async (event) => {
       };
     }
 
-    const isUpdateSchemaPath = event.path === '/updateSchema' || event.pathParameters?.proxy === 'updateSchema';
+    const isSchemasPath = event.path === '/schemas' || event.pathParameters?.proxy === 'schemas';
     
-    if (event.httpMethod === 'POST' && isUpdateSchemaPath) {
+    if (event.httpMethod === 'GET' && isSchemasPath) {
+      const results = await dbClient.send(new ScanCommand({ TableName: SCHEMA_TABLE_NAME }));
+      const schemas = results.Items?.map(item => ({
+        schemaId: item.schemaId?.S,
+        schema: item.schema?.S ? JSON.parse(item.schema.S) : {},
+      })) || [];
+
+      return {
+        statusCode: 200,
+        headers: commonHeaders,
+        body: JSON.stringify({ schemas })
+      };
+    }
+    
+    if (event.httpMethod === 'POST' && isSchemasPath) {
       const body = JSON.parse(event.body || '{}');
       if (!body.schema) throw new Error('Missing schema');
 
@@ -518,6 +532,107 @@ export const handler: APIGatewayProxyHandler = async (event) => {
           allOutputParameters: outputParameters
         })
       };
+    }
+
+    // Handle individual schema endpoints
+    const isSchemaByIdPath = event.path.match(/^\/schemas\/[^\/]+$/) || 
+                            (event.pathParameters?.proxy && event.pathParameters.proxy.match(/^schemas\/[^\/]+$/));
+    
+    if (event.httpMethod === 'GET' && isSchemaByIdPath) {
+      const schemaId = event.path.split('/').pop() || event.pathParameters?.proxy?.split('/')[1];
+      
+      if (!schemaId) {
+        return {
+          statusCode: 400,
+          headers: commonHeaders,
+          body: JSON.stringify({ error: 'Schema ID is required' })
+        };
+      }
+      
+      try {
+        const result = await dbClient.send(new GetItemCommand({
+          TableName: SCHEMA_TABLE_NAME,
+          Key: { schemaId: { S: schemaId } }
+        }));
+
+        if (!result.Item) {
+          return {
+            statusCode: 404,
+            headers: commonHeaders,
+            body: JSON.stringify({ error: 'Schema not found' })
+          };
+        }
+
+        const schema = {
+          schemaId: result.Item.schemaId?.S,
+          schema: result.Item.schema?.S ? JSON.parse(result.Item.schema.S) : {},
+        };
+
+        return {
+          statusCode: 200,
+          headers: commonHeaders,
+          body: JSON.stringify({ schema })
+        };
+      } catch (error) {
+        console.error('Error fetching schema:', error);
+        return {
+          statusCode: 500,
+          headers: commonHeaders,
+          body: JSON.stringify({ error: 'Failed to fetch schema' })
+        };
+      }
+    }
+
+    // Handle individual result endpoints
+    const isResultByIdPath = event.path.match(/^\/results\/[^\/]+$/) || 
+                            (event.pathParameters?.proxy && event.pathParameters.proxy.match(/^results\/[^\/]+$/));
+    
+    if (event.httpMethod === 'GET' && isResultByIdPath) {
+      const transcriptId = event.path.split('/').pop() || event.pathParameters?.proxy?.split('/')[1];
+      
+      if (!transcriptId) {
+        return {
+          statusCode: 400,
+          headers: commonHeaders,
+          body: JSON.stringify({ error: 'Transcript ID is required' })
+        };
+      }
+      
+      try {
+        const result = await dbClient.send(new GetItemCommand({
+          TableName: RESULT_TABLE_NAME,
+          Key: { transcriptId: { S: transcriptId } }
+        }));
+
+        if (!result.Item) {
+          return {
+            statusCode: 404,
+            headers: commonHeaders,
+            body: JSON.stringify({ error: 'Result not found' })
+          };
+        }
+
+        const parsedResult = {
+          transcriptId: result.Item.transcriptId?.S,
+          intentPath: result.Item.intentPath?.S ? JSON.parse(result.Item.intentPath.S) : [],
+          inputParams: result.Item.inputParams?.S ? JSON.parse(result.Item.inputParams.S) : {},
+          outputParams: result.Item.outputParams?.S ? JSON.parse(result.Item.outputParams.S) : {},
+          suggestions: result.Item.suggestions?.S ? JSON.parse(result.Item.suggestions.S) : [],
+        };
+
+        return {
+          statusCode: 200,
+          headers: commonHeaders,
+          body: JSON.stringify({ result: parsedResult })
+        };
+      } catch (error) {
+        console.error('Error fetching result:', error);
+        return {
+          statusCode: 500,
+          headers: commonHeaders,
+          body: JSON.stringify({ error: 'Failed to fetch result' })
+        };
+      }
     }
 
     return {

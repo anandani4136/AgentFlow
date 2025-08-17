@@ -6,6 +6,8 @@ import * as lambda from 'aws-cdk-lib/aws-lambda';
 import * as s3n from 'aws-cdk-lib/aws-s3-notifications';
 import * as iam from 'aws-cdk-lib/aws-iam';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
+import * as elasticache from 'aws-cdk-lib/aws-elasticache';
+import * as ec2 from 'aws-cdk-lib/aws-ec2';
 import * as path from 'path';
 import * as dotenv from 'dotenv';
 
@@ -19,6 +21,48 @@ export class BedrockTranscriptClassifierStack extends cdk.Stack {
     const schemaTableName = process.env.SCHEMA_TABLE_NAME || 'IntentSchemaTable';
     const resultTableName = process.env.RESULT_TABLE_NAME || 'ParsedResultsTable';
     const bedrockModelId = process.env.BEDROCK_MODEL_ID || 'amazon.nova-lite-v1:0';
+
+    // Create VPC for ElastiCache
+    const vpc = new ec2.Vpc(this, 'ConversationBotVPC', {
+      maxAzs: 2,
+      natGateways: 1,
+      subnetConfiguration: [
+        {
+          cidrMask: 24,
+          name: 'Public',
+          subnetType: ec2.SubnetType.PUBLIC,
+        },
+        {
+          cidrMask: 24,
+          name: 'Private',
+          subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+        },
+      ],
+    });
+
+    // Create ElastiCache Redis cluster
+    const redisSubnetGroup = new elasticache.CfnSubnetGroup(this, 'RedisSubnetGroup', {
+      description: 'Subnet group for Redis cluster',
+      subnetIds: vpc.privateSubnets.map(subnet => subnet.subnetId),
+    });
+
+    const redisSecurityGroup = new ec2.SecurityGroup(this, 'RedisSecurityGroup', {
+      vpc,
+      description: 'Security group for Redis cluster',
+      allowAllOutbound: true,
+    });
+
+    const redisCluster = new elasticache.CfnCacheCluster(this, 'ConversationBotRedis', {
+      engine: 'redis',
+      cacheNodeType: 'cache.t3.micro', // Start small, can scale up
+      numCacheNodes: 1,
+      vpcSecurityGroupIds: [redisSecurityGroup.securityGroupId],
+      cacheSubnetGroupName: redisSubnetGroup.ref,
+      port: 6379,
+      preferredAvailabilityZone: vpc.privateSubnets[0].availabilityZone,
+    });
+
+    redisCluster.addDependsOn(redisSubnetGroup);
 
     const transcriptBucket = new s3.Bucket(this, 'TranscriptUploadBucket', {
       bucketName: bucketName,
@@ -68,6 +112,10 @@ export class BedrockTranscriptClassifierStack extends cdk.Stack {
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda')),
       timeout: cdk.Duration.seconds(30),
+      vpc,
+      vpcSubnets: {
+        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+      },
       environment: {
         SCHEMA_TABLE_NAME: schemaTable.tableName,
         RESULT_TABLE_NAME: resultTable.tableName,
@@ -76,6 +124,8 @@ export class BedrockTranscriptClassifierStack extends cdk.Stack {
         OUTPUT_PARAMETERS_TABLE_NAME: outputParametersTable.tableName,
         BUCKET_NAME: transcriptBucket.bucketName,
         BEDROCK_MODEL_ID: bedrockModelId,
+        REDIS_ENDPOINT: redisCluster.attrRedisEndpointAddress,
+        REDIS_PORT: redisCluster.attrRedisEndpointPort,
         REGION: this.region,
       },
     });
@@ -91,6 +141,10 @@ export class BedrockTranscriptClassifierStack extends cdk.Stack {
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda-api')),
       timeout: cdk.Duration.seconds(30),
+      vpc,
+      vpcSubnets: {
+        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+      },
       environment: {
         SCHEMA_TABLE_NAME: schemaTable.tableName,
         RESULT_TABLE_NAME: resultTable.tableName,
@@ -98,13 +152,31 @@ export class BedrockTranscriptClassifierStack extends cdk.Stack {
         INPUT_PARAMETERS_TABLE_NAME: inputParametersTable.tableName,
         OUTPUT_PARAMETERS_TABLE_NAME: outputParametersTable.tableName,
         CLASSIFIER_FUNCTION_NAME: classifierFunction.functionName,
+        REDIS_ENDPOINT: redisCluster.attrRedisEndpointAddress,
+        REDIS_PORT: redisCluster.attrRedisEndpointPort,
+        REGION: this.region,
+      },
+    });
+
+    const conversationFunction = new lambda.Function(this, 'ConversationFunction', {
+      runtime: lambda.Runtime.NODEJS_20_X,
+      handler: 'index.handler',
+      code: lambda.Code.fromAsset(path.join(__dirname, '../lambda-conversation')),
+      timeout: cdk.Duration.seconds(30),
+      vpc,
+      vpcSubnets: {
+        subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
+      },
+      environment: {
+        REDIS_ENDPOINT: redisCluster.attrRedisEndpointAddress,
+        REDIS_PORT: redisCluster.attrRedisEndpointPort,
         REGION: this.region,
       },
     });
 
     const api = new apigateway.LambdaRestApi(this, 'TranscriptApi', {
       handler: apiFunction,
-      proxy: true,
+      proxy: false,
       defaultCorsPreflightOptions: {
         allowOrigins: apigateway.Cors.ALL_ORIGINS,
         allowMethods: apigateway.Cors.ALL_METHODS,
@@ -112,6 +184,32 @@ export class BedrockTranscriptClassifierStack extends cdk.Stack {
         allowCredentials: true,
       },
     });
+
+    // Add conversation endpoints to API Gateway
+    const conversationResource = api.root.addResource('conversation');
+    conversationResource.addMethod('POST', new apigateway.LambdaIntegration(conversationFunction));
+    
+    const historyResource = conversationResource.addResource('history').addResource('{sessionId}');
+    historyResource.addMethod('GET', new apigateway.LambdaIntegration(conversationFunction));
+    
+    const sessionResource = conversationResource.addResource('{sessionId}');
+    sessionResource.addMethod('DELETE', new apigateway.LambdaIntegration(conversationFunction));
+
+    // Add existing API routes for transcript functionality
+    const schemasResource = api.root.addResource('schemas');
+    schemasResource.addMethod('GET', new apigateway.LambdaIntegration(apiFunction));
+    schemasResource.addMethod('POST', new apigateway.LambdaIntegration(apiFunction));
+    
+    const schemaByIdResource = schemasResource.addResource('{schemaId}');
+    schemaByIdResource.addMethod('GET', new apigateway.LambdaIntegration(apiFunction));
+    schemaByIdResource.addMethod('PUT', new apigateway.LambdaIntegration(apiFunction));
+    schemaByIdResource.addMethod('DELETE', new apigateway.LambdaIntegration(apiFunction));
+    
+    const resultsResource = api.root.addResource('results');
+    resultsResource.addMethod('GET', new apigateway.LambdaIntegration(apiFunction));
+    
+    const resultByIdResource = resultsResource.addResource('{transcriptId}');
+    resultByIdResource.addMethod('GET', new apigateway.LambdaIntegration(apiFunction));
 
     transcriptBucket.grantRead(classifierFunction);
     schemaTable.grantReadWriteData(classifierFunction);
@@ -127,7 +225,15 @@ export class BedrockTranscriptClassifierStack extends cdk.Stack {
     outputParametersTable.grantReadWriteData(apiFunction);
     classifierFunction.grantInvoke(apiFunction);
 
-    [classifierFunction, apiFunction].forEach(fn => {
+    // Allow Lambda functions to access Redis
+    // Lambda functions in VPC automatically get security groups
+    redisSecurityGroup.addIngressRule(
+      ec2.Peer.anyIpv4(),
+      ec2.Port.tcp(6379),
+      'Allow Lambda functions to access Redis'
+    );
+
+    [classifierFunction, apiFunction, conversationFunction].forEach(fn => {
       fn.role?.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonBedrockFullAccess'));
       fn.role?.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonS3ReadOnlyAccess'));
       fn.role?.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonDynamoDBFullAccess'));

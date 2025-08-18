@@ -1,4 +1,6 @@
 import { RedisService, ConversationSession } from './redis-service';
+import { IntentDetector, IntentMatch } from './intent-detector';
+import { ContextManager } from './context-manager';
 import { v4 as uuidv4 } from 'uuid';
 
 export interface ConversationRequest {
@@ -19,13 +21,26 @@ export interface ConversationResponse {
 
 export class ConversationManager {
   private redisService: RedisService;
+  private intentDetector: IntentDetector;
+  private contextManager: ContextManager;
 
   constructor(redisService: RedisService) {
     this.redisService = redisService;
+    this.intentDetector = new IntentDetector(redisService);
+    this.contextManager = new ContextManager(redisService);
   }
 
   async processMessage(request: ConversationRequest): Promise<ConversationResponse> {
     let session: ConversationSession;
+
+    // Initialize intent detector and context manager
+    try {
+      console.log('Initializing intent detector...');
+      await this.intentDetector.initialize();
+      console.log('Intent detector initialized successfully');
+    } catch (error) {
+      console.error('Error initializing intent detector:', error);
+    }
 
     // Get or create session
     if (request.sessionId) {
@@ -41,28 +56,58 @@ export class ConversationManager {
     // Add user message to history
     await this.redisService.addMessageToHistory(session.sessionId, 'user', request.message);
 
-    // TODO: Add intent detection here (we'll implement this in Step 2)
-    const intent = await this.detectIntent(request.message, session);
+    // Detect intent using BM25/TF-IDF
+    console.log('Detecting intent for message:', request.message);
+    let intentMatch;
+    try {
+      intentMatch = await this.intentDetector.detectIntent(request.message, session.context);
+      console.log('Intent detected:', intentMatch);
+    } catch (error) {
+      console.error('Error detecting intent:', error);
+      // Fallback intent
+      intentMatch = {
+        intent: 'general_inquiry',
+        confidence: 0.5,
+        matchedKeywords: [],
+        extractedParameters: {},
+        suggestedActions: ['ask_for_clarification', 'provide_general_info'],
+        context: 'general',
+      };
+    }
     
-    // TODO: Add context switching here (we'll implement this in Step 2)
-    const response = await this.generateResponse(request.message, session, intent);
+    // Check if we should switch context
+    console.log('Checking context switch...');
+    const contextSwitch = await this.contextManager.shouldSwitchContext(intentMatch, session.sessionId);
+    console.log('Context switch decision:', contextSwitch);
+    
+    if (contextSwitch.shouldSwitch && contextSwitch.targetContext) {
+      await this.contextManager.switchContext(
+        session.sessionId, 
+        contextSwitch.targetContext, 
+        `Intent: ${intentMatch.intent}`,
+        intentMatch.extractedParameters
+      );
+    }
+
+    // Generate response based on context and intent
+    const response = await this.generateResponse(request.message, session, intentMatch);
 
     // Add assistant response to history
     await this.redisService.addMessageToHistory(session.sessionId, 'assistant', response);
 
     // Update session with new intent and parameters
     await this.redisService.updateSession(session.sessionId, {
-      currentIntent: intent.name,
-      extractedParameters: { ...session.extractedParameters, ...intent.parameters },
+      currentIntent: intentMatch.intent,
+      extractedParameters: { ...session.extractedParameters, ...intentMatch.extractedParameters },
     });
 
     return {
       sessionId: session.sessionId,
       response,
-      intent: intent.name,
-      confidence: intent.confidence,
-      extractedParameters: intent.parameters,
-      suggestedActions: intent.suggestedActions,
+      intent: intentMatch.intent,
+      confidence: intentMatch.confidence,
+      extractedParameters: intentMatch.extractedParameters,
+      suggestedActions: intentMatch.suggestedActions,
     };
   }
 
@@ -81,26 +126,29 @@ export class ConversationManager {
     return session;
   }
 
-  private async detectIntent(message: string, session: ConversationSession): Promise<{
-    name: string;
-    confidence: number;
-    parameters: Record<string, any>;
-    suggestedActions: string[];
-  }> {
-    // TODO: Implement intent detection with BM25/TF-IDF and LLM
-    // For now, return a basic response
-    return {
-      name: 'general_inquiry',
-      confidence: 0.8,
-      parameters: {},
-      suggestedActions: ['ask_for_clarification', 'provide_general_info'],
-    };
-  }
-
-  private async generateResponse(message: string, session: ConversationSession, intent: any): Promise<string> {
-    // TODO: Implement response generation with RAG and context switching
-    // For now, return a basic response
-    return `I understand you're asking about: "${message}". I'm here to help! This is a placeholder response - we'll implement proper response generation in the next steps.`;
+  private async generateResponse(message: string, session: ConversationSession, intentMatch: IntentMatch): Promise<string> {
+    // Get current context state
+    const contextState = await this.contextManager.getContextState(session.sessionId);
+    
+    // Get context-specific response
+    const contextResponse = await this.contextManager.getContextResponse(intentMatch.intent, contextState.currentContext);
+    
+    // Validate parameters for the current context
+    const parameterValidation = await this.contextManager.validateContextParameters(
+      contextState.currentContext, 
+      intentMatch.extractedParameters
+    );
+    
+    if (!parameterValidation.isValid && parameterValidation.missingParameters.length > 0) {
+      return `I can help you with that. To proceed, I need: ${parameterValidation.missingParameters.join(', ')}.`;
+    }
+    
+    // If context switched, add context transition message
+    if (contextState.previousContext && contextState.previousContext !== contextState.currentContext) {
+      return `I've switched to ${contextState.currentContext} mode. ${contextResponse}`;
+    }
+    
+    return contextResponse;
   }
 
   async getSessionHistory(sessionId: string): Promise<ConversationSession | null> {

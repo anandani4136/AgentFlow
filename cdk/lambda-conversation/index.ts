@@ -28,12 +28,16 @@ export const handler = async (event: APIGatewayProxyEvent): Promise<APIGatewayPr
         };
       }
 
+      console.log('Processing message:', { userId, message, sessionId, context });
+      
       const response = await conversationManager.processMessage({
         userId,
         message,
         sessionId,
         context,
       });
+      
+      console.log('Response:', response);
 
       return {
         statusCode: 200,

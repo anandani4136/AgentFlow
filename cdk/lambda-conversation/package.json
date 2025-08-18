@@ -1,0 +1,13 @@
+{
+    "name": "conversation-lambda",
+    "version": "1.0.0",
+    "description": "Conversation bot Lambda function",
+    "main": "index.js",
+    "dependencies": {
+        "ioredis": "^5.3.2",
+        "uuid": "^9.0.1"
+    },
+    "devDependencies": {
+        "@types/uuid": "^9.0.7"
+    }
+}

@@ -15,3 +15,7 @@ cdk.out
 # Transcript files (user data - don't commit)
 scripts/transcripts/
 *.txt
+
+# DS_Store
+.DS_Store
+**/.DS_Store

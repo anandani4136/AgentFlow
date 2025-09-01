@@ -8,6 +8,7 @@ import * as iam from 'aws-cdk-lib/aws-iam';
 import * as apigateway from 'aws-cdk-lib/aws-apigateway';
 import * as elasticache from 'aws-cdk-lib/aws-elasticache';
 import * as ec2 from 'aws-cdk-lib/aws-ec2';
+import * as opensearch from 'aws-cdk-lib/aws-opensearchservice';
 import * as path from 'path';
 import * as dotenv from 'dotenv';
 
@@ -52,6 +53,13 @@ export class BedrockTranscriptClassifierStack extends cdk.Stack {
       allowAllOutbound: true,
     });
 
+    // Create security group for Lambda functions
+    const lambdaSecurityGroup = new ec2.SecurityGroup(this, 'LambdaSecurityGroup', {
+      vpc,
+      description: 'Security group for Lambda functions',
+      allowAllOutbound: true,
+    });
+
     const redisCluster = new elasticache.CfnCacheCluster(this, 'ConversationBotRedis', {
       engine: 'redis',
       cacheNodeType: 'cache.t3.micro', // Start small, can scale up
@@ -63,6 +71,9 @@ export class BedrockTranscriptClassifierStack extends cdk.Stack {
     });
 
     redisCluster.addDependsOn(redisSubnetGroup);
+
+    // TODO: Add OpenSearch domain for vector store in future iteration
+    // For now, we'll use a simpler approach with in-memory storage
 
     const transcriptBucket = new s3.Bucket(this, 'TranscriptUploadBucket', {
       bucketName: bucketName,
@@ -99,6 +110,14 @@ export class BedrockTranscriptClassifierStack extends cdk.Stack {
       removalPolicy: cdk.RemovalPolicy.DESTROY,
     });
 
+    // FAQ Sources table for storing FAQ URLs and configurations
+    const faqSourcesTableName = process.env.FAQ_SOURCES_TABLE_NAME || 'FAQSourcesTable';
+    const faqSourcesTable = new dynamodb.Table(this, 'FAQSourcesTable', {
+      tableName: faqSourcesTableName,
+      partitionKey: { name: 'sourceId', type: dynamodb.AttributeType.STRING },
+      removalPolicy: cdk.RemovalPolicy.DESTROY,
+    });
+
     const outputParametersTableName = process.env.OUTPUT_PARAMETERS_TABLE_NAME || 'OutputParametersTable';
     const outputParametersTable = new dynamodb.Table(this, 'OutputParametersTable', {
       tableName: outputParametersTableName,
@@ -116,6 +135,7 @@ export class BedrockTranscriptClassifierStack extends cdk.Stack {
       vpcSubnets: {
         subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
       },
+      securityGroups: [lambdaSecurityGroup],
       environment: {
         SCHEMA_TABLE_NAME: schemaTable.tableName,
         RESULT_TABLE_NAME: resultTable.tableName,
@@ -145,6 +165,7 @@ export class BedrockTranscriptClassifierStack extends cdk.Stack {
       vpcSubnets: {
         subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
       },
+      securityGroups: [lambdaSecurityGroup],
       environment: {
         SCHEMA_TABLE_NAME: schemaTable.tableName,
         RESULT_TABLE_NAME: resultTable.tableName,
@@ -162,15 +183,20 @@ export class BedrockTranscriptClassifierStack extends cdk.Stack {
       runtime: lambda.Runtime.NODEJS_20_X,
       handler: 'index.handler',
       code: lambda.Code.fromAsset(path.join(__dirname, '../lambda-conversation')),
-      timeout: cdk.Duration.seconds(30),
+      timeout: cdk.Duration.seconds(300), // 5 minutes for training jobs
       vpc,
       vpcSubnets: {
         subnetType: ec2.SubnetType.PRIVATE_WITH_EGRESS,
       },
+      securityGroups: [lambdaSecurityGroup],
       environment: {
         REDIS_ENDPOINT: redisCluster.attrRedisEndpointAddress,
         REDIS_PORT: redisCluster.attrRedisEndpointPort,
+        OPENSEARCH_ENDPOINT: 'placeholder',
+        OPENSEARCH_INDEX: 'conversation-knowledge',
+        FAQ_SOURCES_TABLE_NAME: faqSourcesTable.tableName,
         REGION: this.region,
+        HUGGINGFACE_TOKEN: process.env.HUGGINGFACE_TOKEN || '',
       },
     });
 
@@ -195,6 +221,63 @@ export class BedrockTranscriptClassifierStack extends cdk.Stack {
     const sessionResource = conversationResource.addResource('{sessionId}');
     sessionResource.addMethod('DELETE', new apigateway.LambdaIntegration(conversationFunction));
 
+    // Add intent debug endpoint
+    const debugResource = conversationResource.addResource('debug-intent');
+    debugResource.addMethod('POST', new apigateway.LambdaIntegration(conversationFunction));
+
+    // Add LangChain processing endpoint
+    const langchainResource = conversationResource.addResource('langchain');
+    langchainResource.addMethod('POST', new apigateway.LambdaIntegration(conversationFunction));
+
+    // Add HuggingFace fine-tuning endpoints
+    const finetuneResource = conversationResource.addResource('finetune');
+    
+    // Start fine-tuning
+    const startResource = finetuneResource.addResource('start');
+    startResource.addMethod('POST', new apigateway.LambdaIntegration(conversationFunction));
+    
+    // Get fine-tuning status
+    const statusResource = finetuneResource.addResource('status');
+    const jobStatusResource = statusResource.addResource('{jobId}');
+    jobStatusResource.addMethod('GET', new apigateway.LambdaIntegration(conversationFunction));
+    
+    // Get fine-tuned models
+    const modelsResource = finetuneResource.addResource('models');
+    modelsResource.addMethod('GET', new apigateway.LambdaIntegration(conversationFunction));
+    
+    // Get recommended configuration
+    const configResource = finetuneResource.addResource('config');
+    const recommendedResource = configResource.addResource('recommended');
+    recommendedResource.addMethod('GET', new apigateway.LambdaIntegration(conversationFunction));
+
+    // Add model testing endpoints
+    const testingResource = conversationResource.addResource('testing');
+    
+    // Test model accuracy
+    const testAccuracyResource = testingResource.addResource('accuracy');
+    testAccuracyResource.addMethod('POST', new apigateway.LambdaIntegration(conversationFunction));
+    
+    // Use model for inference
+    const inferenceResource = testingResource.addResource('inference');
+    inferenceResource.addMethod('POST', new apigateway.LambdaIntegration(conversationFunction));
+    
+    // Compare models
+    const compareResource = testingResource.addResource('compare');
+    compareResource.addMethod('POST', new apigateway.LambdaIntegration(conversationFunction));
+    
+    // Get model performance summary
+    const performanceResource = testingResource.addResource('performance');
+    performanceResource.addMethod('GET', new apigateway.LambdaIntegration(conversationFunction));
+
+    // Add FAQ management endpoints
+    const faqResource = api.root.addResource('faq');
+    const faqSourcesResource = faqResource.addResource('sources');
+    faqSourcesResource.addMethod('GET', new apigateway.LambdaIntegration(conversationFunction));
+    faqSourcesResource.addMethod('POST', new apigateway.LambdaIntegration(conversationFunction));
+    
+    const faqSourceByIdResource = faqSourcesResource.addResource('{sourceId}');
+    faqSourceByIdResource.addMethod('DELETE', new apigateway.LambdaIntegration(conversationFunction));
+
     // Add existing API routes for transcript functionality
     const schemasResource = api.root.addResource('schemas');
     schemasResource.addMethod('GET', new apigateway.LambdaIntegration(apiFunction));
@@ -211,12 +294,23 @@ export class BedrockTranscriptClassifierStack extends cdk.Stack {
     const resultByIdResource = resultsResource.addResource('{transcriptId}');
     resultByIdResource.addMethod('GET', new apigateway.LambdaIntegration(apiFunction));
 
+    // Add transcripts endpoint for frontend compatibility
+    const transcriptsResource = api.root.addResource('transcripts');
+    transcriptsResource.addMethod('GET', new apigateway.LambdaIntegration(apiFunction));
+
+    // Add public intents endpoint for transcript analysis frontend
+    const intentsResource = api.root.addResource('intents');
+    intentsResource.addMethod('GET', new apigateway.LambdaIntegration(apiFunction));
+
     transcriptBucket.grantRead(classifierFunction);
     schemaTable.grantReadWriteData(classifierFunction);
     resultTable.grantWriteData(classifierFunction);
     parametersTable.grantReadWriteData(classifierFunction);
     inputParametersTable.grantReadWriteData(classifierFunction);
     outputParametersTable.grantReadWriteData(classifierFunction);
+    
+    // Grant FAQ sources table permissions
+    faqSourcesTable.grantReadWriteData(conversationFunction);
 
     schemaTable.grantReadWriteData(apiFunction);
     resultTable.grantReadData(apiFunction);
@@ -233,10 +327,19 @@ export class BedrockTranscriptClassifierStack extends cdk.Stack {
       'Allow Lambda functions to access Redis'
     );
 
+    // Allow Lambda functions to access Redis
+    redisSecurityGroup.addIngressRule(
+      ec2.Peer.securityGroupId(lambdaSecurityGroup.securityGroupId),
+      ec2.Port.tcp(6379),
+      'Allow Lambda functions to access Redis'
+    );
+
     [classifierFunction, apiFunction, conversationFunction].forEach(fn => {
       fn.role?.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonBedrockFullAccess'));
       fn.role?.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonS3ReadOnlyAccess'));
       fn.role?.addManagedPolicy(iam.ManagedPolicy.fromAwsManagedPolicyName('AmazonDynamoDBFullAccess'));
     });
+
+    // TODO: Grant OpenSearch permissions to conversation function when OpenSearch is added
   }
 }

@@ -247,7 +247,7 @@ export const handler: APIGatewayProxyHandler = async (event) => {
   }
 
   try {
-    const isTranscriptsPath = event.path === '/results' || event.pathParameters?.proxy === 'results';
+    const isTranscriptsPath = event.path === '/results' || event.path === '/transcripts' || event.pathParameters?.proxy === 'results';
     
     if (event.httpMethod === 'GET' && isTranscriptsPath) {
       const results = await dbClient.send(new ScanCommand({ TableName: RESULT_TABLE_NAME }));
@@ -631,6 +631,88 @@ export const handler: APIGatewayProxyHandler = async (event) => {
           statusCode: 500,
           headers: commonHeaders,
           body: JSON.stringify({ error: 'Failed to fetch result' })
+        };
+      }
+    }
+
+    // Public endpoint for transcript analysis frontend to access intent schemas
+    if (event.httpMethod === 'GET' && event.path === '/intents') {
+      try {
+        // Return the default intent schemas for the transcript analysis frontend
+        const intentSchemas = [
+          {
+            id: 'account_inquiry',
+            name: 'Account Inquiry',
+            category: 'account',
+            keyPhrases: ['account', 'my account', 'account information', 'account details'],
+            suggestedActions: ['Provide account information', 'Direct to account portal', 'Offer self-service options'],
+            responseTemplates: ['I can help you with your account. What specific information do you need?'],
+            parameters: [],
+            priority: 1,
+            isFAQ: false,
+            faqResponses: []
+          },
+          {
+            id: 'billing_balance',
+            name: 'Billing Balance',
+            category: 'billing',
+            keyPhrases: ['bill', 'balance', 'payment', 'amount due', 'billing'],
+            suggestedActions: ['Check account balance', 'Show recent transactions', 'Explain charges'],
+            responseTemplates: ['I can help you with your billing and balance. What would you like to know?'],
+            parameters: [],
+            priority: 1,
+            isFAQ: false,
+            faqResponses: []
+          },
+          {
+            id: 'technical_support',
+            name: 'Technical Support',
+            category: 'support',
+            keyPhrases: ['help', 'support', 'issue', 'problem', 'broken', 'not working'],
+            suggestedActions: ['Troubleshoot issue', 'Create support ticket', 'Escalate to technician'],
+            responseTemplates: ['I\'m here to help with technical issues. Can you describe what\'s happening?'],
+            parameters: [],
+            priority: 1,
+            isFAQ: false,
+            faqResponses: []
+          },
+          {
+            id: 'payment_issue',
+            name: 'Payment Issue',
+            category: 'billing',
+            keyPhrases: ['payment failed', 'declined', 'error', 'can\'t pay', 'payment problem'],
+            suggestedActions: ['Verify payment method', 'Check for errors', 'Provide alternative options'],
+            responseTemplates: ['I can help resolve your payment issue. What error are you seeing?'],
+            parameters: [],
+            priority: 1,
+            isFAQ: false,
+            faqResponses: []
+          },
+          {
+            id: 'general_inquiry',
+            name: 'General Inquiry',
+            category: 'general',
+            keyPhrases: ['question', 'help', 'information', 'how to', 'what is'],
+            suggestedActions: ['Provide general information', 'Direct to appropriate resource', 'Offer assistance'],
+            responseTemplates: ['I\'m here to help! What can I assist you with today?'],
+            parameters: [],
+            priority: 2,
+            isFAQ: false,
+            faqResponses: []
+          }
+        ];
+
+        return {
+          statusCode: 200,
+          headers: commonHeaders,
+          body: JSON.stringify({ intents: intentSchemas })
+        };
+      } catch (error) {
+        console.error('Error fetching intent schemas:', error);
+        return {
+          statusCode: 500,
+          headers: commonHeaders,
+          body: JSON.stringify({ error: 'Failed to fetch intent schemas' })
         };
       }
     }

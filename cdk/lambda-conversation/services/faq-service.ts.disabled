@@ -1,0 +1,148 @@
+import { DynamoDBClient, GetItemCommand, PutItemCommand, DeleteItemCommand, ScanCommand } from '@aws-sdk/client-dynamodb';
+import { marshall, unmarshall } from '@aws-sdk/util-dynamodb';
+
+export interface FAQSource {
+  sourceId: string;
+  name: string;
+  url: string;
+  type: 'url' | 'api';
+  description?: string;
+  status: 'active' | 'inactive';
+  lastUpdated: string;
+  createdAt: string;
+}
+
+export interface CreateFAQSourceRequest {
+  name: string;
+  url: string;
+  type: 'url' | 'api';
+  description?: string;
+  status?: 'active' | 'inactive';
+}
+
+export class FAQService {
+  private client: DynamoDBClient;
+  private tableName: string;
+
+  constructor(tableName: string) {
+    this.tableName = tableName;
+    this.client = new DynamoDBClient({});
+  }
+
+  async getAllSources(): Promise<FAQSource[]> {
+    try {
+      const command = new ScanCommand({
+        TableName: this.tableName,
+      });
+
+      const response = await this.client.send(command);
+      return (response.Items || []).map(item => unmarshall(item)) as FAQSource[];
+    } catch (error) {
+      console.error('Error fetching FAQ sources:', error);
+      throw error;
+    }
+  }
+
+  async getSource(sourceId: string): Promise<FAQSource | null> {
+    try {
+      const command = new GetItemCommand({
+        TableName: this.tableName,
+        Key: marshall({ sourceId }),
+      });
+
+      const response = await this.client.send(command);
+      return response.Item ? unmarshall(response.Item) as FAQSource : null;
+    } catch (error) {
+      console.error('Error fetching FAQ source:', error);
+      throw error;
+    }
+  }
+
+  async createSource(sourceData: CreateFAQSourceRequest): Promise<FAQSource> {
+    try {
+      const now = new Date().toISOString();
+      const sourceId = `faq-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      
+      const source: FAQSource = {
+        sourceId,
+        ...sourceData,
+        status: sourceData.status || 'active',
+        lastUpdated: now,
+        createdAt: now,
+      };
+
+      const command = new PutItemCommand({
+        TableName: this.tableName,
+        Item: marshall(source),
+      });
+
+      await this.client.send(command);
+      return source;
+    } catch (error) {
+      console.error('Error creating FAQ source:', error);
+      throw error;
+    }
+  }
+
+  async updateSource(sourceId: string, updates: Partial<FAQSource>): Promise<FAQSource | null> {
+    try {
+      const existingSource = await this.getSource(sourceId);
+      if (!existingSource) {
+        return null;
+      }
+
+      const updatedSource: FAQSource = {
+        ...existingSource,
+        ...updates,
+        lastUpdated: new Date().toISOString(),
+      };
+
+      const command = new PutItemCommand({
+        TableName: this.tableName,
+        Item: marshall(updatedSource),
+      });
+
+      await this.client.send(command);
+      return updatedSource;
+    } catch (error) {
+      console.error('Error updating FAQ source:', error);
+      throw error;
+    }
+  }
+
+  async deleteSource(sourceId: string): Promise<boolean> {
+    try {
+      const command = new DeleteItemCommand({
+        TableName: this.tableName,
+        Key: marshall({ sourceId }),
+      });
+
+      await this.client.send(command);
+      return true;
+    } catch (error) {
+      console.error('Error deleting FAQ source:', error);
+      throw error;
+    }
+  }
+
+  async getActiveSources(): Promise<FAQSource[]> {
+    try {
+      const command = new ScanCommand({
+        TableName: this.tableName,
+        FilterExpression: '#status = :status',
+        ExpressionAttributeNames: {
+          '#status': 'status',
+        },
+        ExpressionAttributeValues: {
+          ':status': { S: 'active' },
+        },
+      });
+
+      const response = await this.client.send(command);
+      return (response.Items || []).map(item => unmarshall(item)) as FAQSource[];
+    } catch (error) {
+      console.error('Error fetching active FAQ sources:', error);
+      throw error;
+    }
+  }
+}

@@ -35,7 +35,7 @@ export const VisualizationCard: React.FC<VisualizationCardProps> = ({
         <Heading size="md">Intent Flow Visualization</Heading>
       </CardHeader>
       <CardBody>
-        <Box h="600px" w="100vw">
+        <Box h="600px">
           {isLoading ? (
             <VStack spacing={4} justify="center" h="full">
               <Progress size="sm" isIndeterminate w="full" />

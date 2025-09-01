@@ -20,9 +20,6 @@ import {
   Textarea,
   useToast,
   Divider,
-  Icon,
-  Grid,
-  GridItem,
 } from '@chakra-ui/react';
 import { AddIcon, EditIcon, DeleteIcon, SettingsIcon, ChevronDownIcon, ChevronRightIcon, ChevronLeftIcon } from '@chakra-ui/icons';
 
@@ -38,8 +35,8 @@ interface IntentNode {
 }
 
 interface SchemaEditorProps {
-  schema: Record<string, any>;
-  onSchemaChange: (newSchema: Record<string, any>) => void;
+  schema: Record<string, unknown>;
+  onSchemaChange: (newSchema: Record<string, unknown>) => void;
   isOpen: boolean;
   onClose: () => void;
 }
@@ -90,7 +87,7 @@ export const SchemaEditor: React.FC<SchemaEditorProps> = ({
   const [editingNode, setEditingNode] = useState<IntentNode | null>(null);
   const [editName, setEditName] = useState('');
   const [dragOverTarget, setDragOverTarget] = useState<string | null>(null);
-  const [snapZones, setSnapZones] = useState<{ [key: string]: { x: number; y: number; width: number; height: number } }>({});
+
   
   const {
     isOpen: isJsonModalOpen,
@@ -102,7 +99,7 @@ export const SchemaEditor: React.FC<SchemaEditorProps> = ({
   const containerRef = useRef<HTMLDivElement>(null);
 
   // Recursively convert schema to nodes with proper levels
-  const convertSchemaToNodes = useCallback((schemaObj: Record<string, any>, level: number = 0, parentId?: string): IntentNode[] => {
+  const convertSchemaToNodes = useCallback((schemaObj: Record<string, unknown>, level: number = 0, parentId?: string): IntentNode[] => {
     const nodes: IntentNode[] = [];
     let colorIndex = 0;
 
@@ -121,8 +118,8 @@ export const SchemaEditor: React.FC<SchemaEditorProps> = ({
       colorIndex++;
 
       // Recursively add children
-      if (children && typeof children === 'object') {
-        const childNodes = convertSchemaToNodes(children, level + 1, node.id);
+      if (children && typeof children === 'object' && children !== null && !Array.isArray(children)) {
+        const childNodes = convertSchemaToNodes(children as Record<string, unknown>, level + 1, node.id);
         nodes.push(...childNodes);
       }
     });
@@ -137,10 +134,10 @@ export const SchemaEditor: React.FC<SchemaEditorProps> = ({
   }, [schema, convertSchemaToNodes]);
 
   // Convert nodes back to schema (recursive)
-  const nodesToSchema = useCallback((nodeList: IntentNode[]): Record<string, any> => {
-    const buildNodeTree = (parentId?: string): Record<string, any> => {
+  const nodesToSchema = useCallback((nodeList: IntentNode[]): Record<string, unknown> => {
+    const buildNodeTree = (parentId?: string): Record<string, unknown> => {
       const children = nodeList.filter(node => node.parentId === parentId);
-      const result: Record<string, any> = {};
+      const result: Record<string, unknown> = {};
       
       children.forEach(child => {
         result[child.name] = buildNodeTree(child.id);
@@ -165,18 +162,7 @@ export const SchemaEditor: React.FC<SchemaEditorProps> = ({
     return descendants;
   }, []);
 
-  // Get all ancestors of a node
-  const getAncestors = useCallback((nodeId: string, nodeList: IntentNode[]): string[] => {
-    const ancestors: string[] = [];
-    let currentNode = nodeList.find(node => node.id === nodeId);
-    
-    while (currentNode?.parentId) {
-      ancestors.push(currentNode.parentId);
-      currentNode = nodeList.find(node => node.id === currentNode.parentId);
-    }
-    
-    return ancestors;
-  }, []);
+
 
   const handleAddIntent = () => {
     if (!newIntentName.trim()) {
@@ -313,7 +299,6 @@ export const SchemaEditor: React.FC<SchemaEditorProps> = ({
 
     const updatedNodes = [...nodes];
     const descendants = getDescendants(node.id, updatedNodes);
-    const nodesToUpdate = [node.id, ...descendants];
 
     if (direction === 'up') {
       // Move up: become sibling of parent

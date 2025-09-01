@@ -1,12 +1,16 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
   ChakraProvider,
   Box,
   Container,
   SimpleGrid,
   useColorModeValue,
+  Tabs,
+  TabList,
+  TabPanels,
+  Tab,
+  TabPanel,
 } from '@chakra-ui/react';
-import { ResponsiveSankey } from '@nivo/sankey';
 import theme from './theme';
 import { SchemaEditor } from './components/SchemaEditor';
 import { Header } from './components/Header';
@@ -16,6 +20,10 @@ import { SuggestionsCard } from './components/SuggestionsCard';
 import { VisualizationCard } from './components/VisualizationCard';
 import { SettingsModal } from './components/SettingsModal';
 import { DetailModal } from './components/DetailModal';
+import { ConversationTester } from './components/ConversationTester';
+import { FAQManager } from './components/FAQManager';
+import { IntentDebugPanel } from './components/IntentDebugPanel';
+import { HuggingFaceFineTuner } from './components/HuggingFaceFineTuner';
 
 interface TranscriptResult {
   intentPath: string;
@@ -287,30 +295,71 @@ function App() {
         <Container maxW="7xl" py={8}>
           <StatusAlert apiError={apiError} isLoading={isLoading} />
 
-          <SimpleGrid columns={{ base: 1, lg: 2 }} spacing={8} mb={8}>
-            <SchemaCard
-              schemaText={schemaText}
-              schemaObject={schemaObject}
-              onSchemaTextChange={setSchemaText}
-              onUpdateSchema={updateSchema}
-              onRescanAll={rescanAll}
-              onOpenVisualEditor={() => setIsSchemaEditorOpen(true)}
-              isLoading={isLoading}
-              rescanInProgress={rescanInProgress}
-            />
+          <Tabs variant="enclosed" colorScheme="blue" mb={8}>
+            <TabList>
+              <Tab>Conversation Testing</Tab>
+              <Tab>FAQ Management</Tab>
+              <Tab>Intent Debug</Tab>
+              <Tab>Fine-tuning</Tab>
+              <Tab>Transcript Analysis</Tab>
+            </TabList>
 
-            <SuggestionsCard
-              suggestions={suggestions}
-              isLoading={isLoading}
-              onAddSuggestion={handleAddSuggestion}
-            />
-          </SimpleGrid>
+            <TabPanels>
+              {/* Conversation Testing Tab */}
+              <TabPanel>
+                <SimpleGrid columns={{ base: 1, lg: 1 }} spacing={8}>
+                  <ConversationTester apiUrl={apiUrl} />
+                </SimpleGrid>
+              </TabPanel>
 
-          <VisualizationCard
-            sankeyData={sankeyData}
-            isLoading={isLoading}
-            onSankeyClick={handleSankeyClick}
-          />
+              {/* FAQ Management Tab */}
+              <TabPanel>
+                <SimpleGrid columns={{ base: 1, lg: 1 }} spacing={8}>
+                  <FAQManager apiUrl={apiUrl} />
+                </SimpleGrid>
+              </TabPanel>
+
+              {/* Intent Debug Tab */}
+              <TabPanel>
+                <SimpleGrid columns={{ base: 1, lg: 1 }} spacing={8}>
+                  <IntentDebugPanel apiUrl={apiUrl} />
+                </SimpleGrid>
+              </TabPanel>
+
+              <TabPanel>
+                <SimpleGrid columns={{ base: 1, lg: 1 }} spacing={8}>
+                  <HuggingFaceFineTuner apiUrl={apiUrl} />
+                </SimpleGrid>
+              </TabPanel>
+
+              <TabPanel>
+                <SimpleGrid columns={{ base: 1, lg: 2 }} spacing={8} mb={8}>
+                  <SchemaCard
+                    schemaText={schemaText}
+                    schemaObject={schemaObject}
+                    onSchemaTextChange={setSchemaText}
+                    onUpdateSchema={updateSchema}
+                    onRescanAll={rescanAll}
+                    onOpenVisualEditor={() => setIsSchemaEditorOpen(true)}
+                    isLoading={isLoading}
+                    rescanInProgress={rescanInProgress}
+                  />
+
+                  <SuggestionsCard
+                    suggestions={suggestions}
+                    isLoading={isLoading}
+                    onAddSuggestion={handleAddSuggestion}
+                  />
+                </SimpleGrid>
+
+                <VisualizationCard
+                  sankeyData={sankeyData}
+                  isLoading={isLoading}
+                  onSankeyClick={handleSankeyClick}
+                />
+              </TabPanel>
+            </TabPanels>
+          </Tabs>
         </Container>
 
         <SchemaEditor
